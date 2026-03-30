@@ -6,6 +6,8 @@ import chardet
 from ftfy import fix_text
 import inspect
 import shutil
+import importlib
+import json
 
 # --- Try to enable drag & drop (tkinterdnd2) ---
 try:
@@ -19,19 +21,58 @@ except ImportError:
 from langdetect import detect_langs, DetectorFactory, LangDetectException
 DetectorFactory.seed = 0  # deterministic results
 
-LANG_SUFFIXES = {
-    "he": "heb",
-    "en": "eng",
-    "fr": "fra",
-    "es": "spa",
-    "de": "deu",
-    "ru": "rus",
+try:
+    pycountry = importlib.import_module("pycountry")
+except ImportError:
+    pycountry = None
+
+DEFAULT_LANG_SUFFIXES = {
     "ar": "ara",
-    "zh-cn": "zho",
-    "zh-tw": "zho_tw",
+    "bg": "bul",
+    "cs": "cze",
+    "da": "dan",
+    "de": "ger",
+    "el": "gre",
+    "en": "eng",
+    "es": "spa",
+    "et": "est",
+    "fa": "per",
+    "fi": "fin",
+    "fr": "fre",
+    "he": "heb",
+    "hi": "hin",
+    "hr": "hrv",
+    "hu": "hun",
+    "id": "ind",
+    "is": "ice",
+    "it": "ita",
     "ja": "jpn",
     "ko": "kor",
-    # Ajoutez autant de codes que nécessaire...
+    "lt": "lit",
+    "lv": "lav",
+    "mk": "mac",
+    "ms": "may",
+    "nl": "dut",
+    "no": "nor",
+    "pl": "pol",
+    "pt": "por",
+    "ro": "rum",
+    "ru": "rus",
+    "sk": "slo",
+    "sl": "slv",
+    "sq": "alb",
+    "sr": "srp",
+    "sv": "swe",
+    "th": "tha",
+    "tr": "tur",
+    "uk": "ukr",
+    "ur": "urd",
+    "vi": "vie",
+    "zh": "chi",
+    "zh-cn": "chi",
+    "zh-tw": "chi",
+    "pt-br": "por",
+    "pt-pt": "por",
 }
 
 SUPPORTED_EXTENSIONS = {
@@ -39,6 +80,7 @@ SUPPORTED_EXTENSIONS = {
     ".md", ".csv", ".tsv", ".ini", ".log", ".json", ".xml"
 }
 ICON_PATH = Path(__file__).with_name("utf8converter.ico")
+LANGUAGE_SUFFIXES_PATH = Path(__file__).with_name("language_suffixes.json")
 ENCODINGS = [
     "Auto-detect", "UTF-8", "UTF-16", "UTF-16 LE", "UTF-16 BE",
     "ISO-8859-1", "Windows-1252", "Shift_JIS", "GB18030"
@@ -47,10 +89,60 @@ ENCODINGS = [
 HAS_REMOVE_FLAG = "remove_unsafe_private_use" in inspect.signature(fix_text).parameters
 
 
+def _normalize_suffix_map(raw_map):
+    normalized = {}
+    for key, value in raw_map.items():
+        code = str(key).strip().lower()
+        suffix = str(value).strip().lower()
+        if code and suffix:
+            normalized[code] = suffix
+    return normalized
+
+
+def load_language_suffixes():
+    mapping = dict(DEFAULT_LANG_SUFFIXES)
+    if LANGUAGE_SUFFIXES_PATH.exists():
+        try:
+            with open(LANGUAGE_SUFFIXES_PATH, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                mapping.update(_normalize_suffix_map(loaded))
+        except Exception:
+            pass
+    return _normalize_suffix_map(mapping)
+
+
+LANG_SUFFIXES = load_language_suffixes()
+
+
 def safe_fix_text(text):
     if HAS_REMOVE_FLAG:
         return fix_text(text, remove_unsafe_private_use=False)
     return fix_text(text)
+
+
+def language_to_suffix(lang_code):
+    code = (lang_code or "").lower().strip()
+    if not code:
+        return None
+
+    if code in LANG_SUFFIXES:
+        return LANG_SUFFIXES[code]
+
+    base_code = code.split("-")[0]
+    if base_code in LANG_SUFFIXES:
+        return LANG_SUFFIXES[base_code]
+
+    if pycountry:
+        language = pycountry.languages.get(alpha_2=base_code)
+        if language:
+            return getattr(language, "bibliographic", None) or getattr(language, "alpha_3", None)
+        language = pycountry.languages.get(alpha_3=base_code)
+        if language:
+            return getattr(language, "bibliographic", None) or getattr(language, "alpha_3", None)
+
+    fallback = base_code.replace("-", "_")
+    return fallback if fallback else "und"
 
 
 def detect_language_tag(text, snippet_len=5000, min_prob=0.60):
@@ -69,7 +161,7 @@ def detect_language_tag(text, snippet_len=5000, min_prob=0.60):
         return None, best.prob
 
     lang_code = best.lang.lower()
-    suffix = LANG_SUFFIXES.get(lang_code, lang_code.replace("-", "_"))
+    suffix = language_to_suffix(lang_code)
     return suffix, best.prob
 
 
@@ -132,9 +224,11 @@ def convert_file(file_path, make_backup, auto_fix, forced_encoding, output_folde
     with open(target_path, "wb") as fh:
         fh.write(utf8_bytes)
 
-    lang_suffix, lang_prob = detect_language_tag(decoded)
-    if lang_suffix:
-        target_path = append_language_suffix(target_path, lang_suffix)
+    lang_suffix, lang_prob = None, None
+    if target_path.suffix.lower() == ".srt":
+        lang_suffix, lang_prob = detect_language_tag(decoded)
+        if lang_suffix:
+            target_path = append_language_suffix(target_path, lang_suffix)
 
     return encoding_used, confidence, target_path, lang_suffix, lang_prob
 
@@ -151,11 +245,13 @@ class ConverterApp(BaseClass):
         self.geometry("780x540")
         self.resizable(False, False)
 
-        self.backup_var = tk.BooleanVar(value=True)
+        self.backup_var = tk.BooleanVar(value=False)
         self.fix_var = tk.BooleanVar(value=True)
         self.manual_encoding = tk.StringVar(value="Auto-detect")
         self.output_folder = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Drop files or click 'Add Files' to begin.")
+        self.backup_hint_tip = None
+        self.backup_hint_pinned = False
 
         self._build_ui()
         self.manual_encoding.trace_add("write", lambda *_: self._update_convert_button_label())
@@ -191,8 +287,15 @@ class ConverterApp(BaseClass):
         options_frame = ttk.Frame(container)
         options_frame.pack(fill=tk.X, pady=4)
 
-        ttk.Checkbutton(options_frame, text="Create .bak backups before converting",
-                        variable=self.backup_var).grid(row=0, column=0, sticky="w")
+        backup_row = ttk.Frame(options_frame)
+        backup_row.grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(backup_row, text="Create .bak backups before converting",
+                variable=self.backup_var).pack(side=tk.LEFT)
+        backup_hint = ttk.Label(backup_row, text="ⓘ", foreground="#0a5fb4", cursor="hand2")
+        backup_hint.pack(side=tk.LEFT, padx=(6, 0))
+        backup_hint.bind("<Enter>", self._show_backup_hint)
+        backup_hint.bind("<Leave>", self._hide_backup_hint)
+        backup_hint.bind("<Button-1>", self._toggle_backup_hint)
         ttk.Checkbutton(options_frame, text="Auto-fix mojibake / garbled text (ftfy)",
                         variable=self.fix_var).grid(row=1, column=0, sticky="w")
 
@@ -319,6 +422,50 @@ class ConverterApp(BaseClass):
             self.convert_button.config(text=f"Convert to UTF-8 (force: {selected})")
         else:
             self.convert_button.config(text="Convert to UTF-8")
+
+    def _show_backup_hint(self, event=None):
+        widget = event.widget if event else self
+        if self.backup_hint_tip and self.backup_hint_tip.winfo_exists():
+            return
+
+        x = widget.winfo_rootx() + widget.winfo_width() + 10
+        y = widget.winfo_rooty() - 4
+
+        tip = tk.Toplevel(self)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tip,
+            text="Optional. Backups are disabled by default.\nEnable only if you want .bak copies.",
+            bg="#fff8dc",
+            fg="#222222",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=5,
+            justify="left"
+        )
+        label.pack()
+        self.backup_hint_tip = tip
+
+    def _hide_backup_hint(self, _event=None):
+        if self.backup_hint_pinned:
+            return
+        if self.backup_hint_tip and self.backup_hint_tip.winfo_exists():
+            self.backup_hint_tip.destroy()
+        self.backup_hint_tip = None
+
+    def _toggle_backup_hint(self, event):
+        if self.backup_hint_tip and self.backup_hint_tip.winfo_exists():
+            if self.backup_hint_pinned:
+                self.backup_hint_pinned = False
+                self._hide_backup_hint()
+            else:
+                self.backup_hint_pinned = True
+            return
+
+        self.backup_hint_pinned = True
+        self._show_backup_hint(event)
 
 
 if __name__ == "__main__":

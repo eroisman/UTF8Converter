@@ -2,7 +2,7 @@
 
 Convertisseur graphique pour textes et sous-titres qui :
 - détecte l’encodage, convertit en UTF-8 et corrige éventuellement le texte (mojibake) ;
-- détecte automatiquement la langue et ajoute un suffixe (`-heb`, `-eng`, etc.) aux fichiers convertis ;
+- détecte automatiquement la langue des fichiers `.srt` et ajoute un suffixe type MKVToolNix (`-heb`, `-eng`, `-ger`, etc.) aux fichiers convertis ;
 - gère le drag & drop des fichiers dans l’interface ;
 - permet de forcer l’encodage d’entrée, de choisir un dossier de sortie, de créer des sauvegardes `.bak` et de suivre la progression via une barre et un journal.
 
@@ -14,7 +14,7 @@ Convertisseur graphique pour textes et sous-titres qui :
 - **Interface Windows** (Tkinter + ttk) avec icône personnalisable.
 - **Auto-détection** de l’encodage (via `chardet`) et conversion en UTF-8.
 - **Corrections automatiques** (optionnelles) avec `ftfy`.
-- **Langue** détectée via `langdetect` avec renommage automatique (`nom-heb.srt`, `nom-eng.txt`, …).
+- **Langue** détectée via `langdetect` avec renommage automatique des `.srt` (`nom-heb.srt`, `nom-eng.srt`, …) en s'appuyant sur `language_suffixes.json`.
 - **Drag & Drop** (via `tkinterdnd2`).
 - **Traitement par lots** et conversion non bloquante (thread séparé).
 - **Sauvegardes optionnelles** des fichiers d’origine.
@@ -28,6 +28,9 @@ Convertisseur graphique pour textes et sous-titres qui :
 2. Installer les dépendances :
    ```powershell
    pip install chardet ftfy langdetect tkinterdnd2 pyinstaller
+
+   # Optionnel mais recommandé pour des suffixes langue ISO-639-2 complets
+   pip install pycountry
    ```
 3. Placer les fichiers suivants dans un dossier (ex. `C:\Dev\UTF8Converter`) :
    - `utf8_converter_gui.py`
@@ -125,7 +128,8 @@ Créez un script `build.ps1` contenant la commande ci-dessus. Ensuite, lancez si
 
 ## 8. Personnalisation
 
-- **Ajoutez/éditez** les suffixes de langue dans le dictionnaire `LANG_SUFFIXES`.
+- Les suffixes de langue sont compatibles style MKVToolNix (codes ISO-639-2/B quand disponibles) avec fallback automatique.
+- Vous pouvez personnaliser les suffixes dans `language_suffixes.json` (prioritaire). Le script garde un fallback automatique si un code n'est pas trouvé.
 - Adaptez la liste des encodages proposés (`ENCODINGS`).
 - Modifiez les extensions prises en charge (`SUPPORTED_EXTENSIONS`).
 - Ajoutez d’autres fonctionnalités (ex. mémorisation des réglages, previews, etc.).
