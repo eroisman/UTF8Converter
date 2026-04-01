@@ -1,19 +1,33 @@
-# Local secrets
+# ⚠️  SECURITY: LOCAL CONFIGURATION & SECRETS
+# Never commit local config files containing GitHub tokens or sensitive data
 update_config.json
 .env
 .env.*
+.secrets
 
-# Python cache/venv
+# Python environment & cache
 __pycache__/
 *.py[cod]
 .venv/
+venv/
+env/
 
-# Build outputs
+# Build & distribution outputs
 build/
 dist/
 *.spec.bak
+*.egg-info/
 
-# OS/editor noise
+# OS & editor files
 .DS_Store
 Thumbs.db
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode
+.idea/
+

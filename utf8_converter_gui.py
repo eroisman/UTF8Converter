@@ -8,6 +8,7 @@ import hashlib
 import tempfile
 import subprocess
 import webbrowser
+import json
 
 from text_conversion import ENCODINGS, SUPPORTED_EXTENSIONS, convert_file
 from updater import (
@@ -30,8 +31,22 @@ except ImportError:
     DND_FILES = None
 
 ICON_PATH = Path(__file__).with_name("utf8converter.ico")
+VERSION_FILE = Path(__file__).with_name("version.json")
 
-APP_VERSION = "0.1.0"
+
+def _load_app_version():
+    """Load version from version.json, fallback to 0.1.0 if not found."""
+    try:
+        if VERSION_FILE.exists():
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return str(data.get("version", "0.1.0"))
+    except Exception:
+        pass
+    return "0.1.0"
+
+
+APP_VERSION = _load_app_version()
 
 
 BaseClass = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
