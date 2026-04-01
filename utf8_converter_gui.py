@@ -2,12 +2,24 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import threading
-import chardet
-from ftfy import fix_text
-import inspect
-import shutil
-import importlib
-import json
+import os
+import sys
+import hashlib
+import tempfile
+import subprocess
+import webbrowser
+
+from text_conversion import ENCODINGS, SUPPORTED_EXTENSIONS, convert_file
+from updater import (
+    build_effective_update_config,
+    fetch_manifest_from_github_release,
+    is_newer_version,
+    load_update_state,
+    save_update_state,
+    download_to_file,
+    should_check_for_updates,
+    mark_update_check,
+)
 
 # --- Try to enable drag & drop (tkinterdnd2) ---
 try:
@@ -17,226 +29,18 @@ except ImportError:
     DND_AVAILABLE = False
     DND_FILES = None
 
-# --- Language detection ---
-from langdetect import detect_langs, DetectorFactory, LangDetectException
-DetectorFactory.seed = 0  # deterministic results
-
-try:
-    pycountry = importlib.import_module("pycountry")
-except ImportError:
-    pycountry = None
-
-DEFAULT_LANG_SUFFIXES = {
-    "ar": "ara",
-    "bg": "bul",
-    "cs": "cze",
-    "da": "dan",
-    "de": "ger",
-    "el": "gre",
-    "en": "eng",
-    "es": "spa",
-    "et": "est",
-    "fa": "per",
-    "fi": "fin",
-    "fr": "fre",
-    "he": "heb",
-    "hi": "hin",
-    "hr": "hrv",
-    "hu": "hun",
-    "id": "ind",
-    "is": "ice",
-    "it": "ita",
-    "ja": "jpn",
-    "ko": "kor",
-    "lt": "lit",
-    "lv": "lav",
-    "mk": "mac",
-    "ms": "may",
-    "nl": "dut",
-    "no": "nor",
-    "pl": "pol",
-    "pt": "por",
-    "ro": "rum",
-    "ru": "rus",
-    "sk": "slo",
-    "sl": "slv",
-    "sq": "alb",
-    "sr": "srp",
-    "sv": "swe",
-    "th": "tha",
-    "tr": "tur",
-    "uk": "ukr",
-    "ur": "urd",
-    "vi": "vie",
-    "zh": "chi",
-    "zh-cn": "chi",
-    "zh-tw": "chi",
-    "pt-br": "por",
-    "pt-pt": "por",
-}
-
-SUPPORTED_EXTENSIONS = {
-    ".txt", ".srt", ".ass", ".ssa", ".sub", ".vtt", ".lrc",
-    ".md", ".csv", ".tsv", ".ini", ".log", ".json", ".xml"
-}
 ICON_PATH = Path(__file__).with_name("utf8converter.ico")
-LANGUAGE_SUFFIXES_PATH = Path(__file__).with_name("language_suffixes.json")
-ENCODINGS = [
-    "Auto-detect", "UTF-8", "UTF-16", "UTF-16 LE", "UTF-16 BE",
-    "ISO-8859-1", "Windows-1252", "Shift_JIS", "GB18030"
-]
 
-HAS_REMOVE_FLAG = "remove_unsafe_private_use" in inspect.signature(fix_text).parameters
-
-
-def _normalize_suffix_map(raw_map):
-    normalized = {}
-    for key, value in raw_map.items():
-        code = str(key).strip().lower()
-        suffix = str(value).strip().lower()
-        if code and suffix:
-            normalized[code] = suffix
-    return normalized
-
-
-def load_language_suffixes():
-    mapping = dict(DEFAULT_LANG_SUFFIXES)
-    if LANGUAGE_SUFFIXES_PATH.exists():
-        try:
-            with open(LANGUAGE_SUFFIXES_PATH, "r", encoding="utf-8") as fh:
-                loaded = json.load(fh)
-            if isinstance(loaded, dict):
-                mapping.update(_normalize_suffix_map(loaded))
-        except Exception:
-            pass
-    return _normalize_suffix_map(mapping)
-
-
-LANG_SUFFIXES = load_language_suffixes()
-
-
-def safe_fix_text(text):
-    if HAS_REMOVE_FLAG:
-        return fix_text(text, remove_unsafe_private_use=False)
-    return fix_text(text)
-
-
-def language_to_suffix(lang_code):
-    code = (lang_code or "").lower().strip()
-    if not code:
-        return None
-
-    if code in LANG_SUFFIXES:
-        return LANG_SUFFIXES[code]
-
-    base_code = code.split("-")[0]
-    if base_code in LANG_SUFFIXES:
-        return LANG_SUFFIXES[base_code]
-
-    if pycountry:
-        language = pycountry.languages.get(alpha_2=base_code)
-        if language:
-            return getattr(language, "bibliographic", None) or getattr(language, "alpha_3", None)
-        language = pycountry.languages.get(alpha_3=base_code)
-        if language:
-            return getattr(language, "bibliographic", None) or getattr(language, "alpha_3", None)
-
-    fallback = base_code.replace("-", "_")
-    return fallback if fallback else "und"
-
-
-def detect_language_tag(text, snippet_len=5000, min_prob=0.60):
-    snippet = text.strip()[:snippet_len]
-    if not snippet:
-        return None, None
-    try:
-        candidates = detect_langs(snippet)
-    except LangDetectException:
-        return None, None
-    if not candidates:
-        return None, None
-
-    best = max(candidates, key=lambda c: c.prob)
-    if best.prob < min_prob:
-        return None, best.prob
-
-    lang_code = best.lang.lower()
-    suffix = language_to_suffix(lang_code)
-    return suffix, best.prob
-
-
-def append_language_suffix(path, suffix):
-    if not suffix:
-        return path
-
-    stem = path.stem
-    if stem.endswith(f"-{suffix}"):
-        return path  # déjà suffixé
-
-    base = stem
-    new_path = path.with_name(f"{base}-{suffix}{path.suffix}")
-    counter = 1
-    while new_path.exists():
-        new_path = path.with_name(f"{base}-{suffix}_{counter}{path.suffix}")
-        counter += 1
-
-    path.rename(new_path)
-    return new_path
-
-
-def convert_file(file_path, make_backup, auto_fix, forced_encoding, output_folder):
-    src_path = Path(file_path)
-
-    if output_folder:
-        output_dir = Path(output_folder)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        target_path = output_dir / src_path.name
-    else:
-        target_path = src_path
-
-    with open(src_path, "rb") as fh:
-        raw = fh.read()
-
-    if forced_encoding and forced_encoding.lower() != "auto-detect":
-        encoding_used = forced_encoding
-        try:
-            decoded = raw.decode(encoding_used, errors="replace")
-            confidence = 1.0
-        except LookupError:
-            decoded = raw.decode("utf-8", errors="replace")
-            encoding_used = "utf-8"
-            confidence = 0.0
-    else:
-        result = chardet.detect(raw)
-        encoding_used = result.get("encoding") or "utf-8"
-        confidence = result.get("confidence") or 0.0
-        decoded = raw.decode(encoding_used, errors="replace")
-
-    if auto_fix:
-        decoded = safe_fix_text(decoded)
-
-    utf8_bytes = decoded.encode("utf-8")
-
-    if not output_folder and make_backup:
-        backup_path = target_path.with_suffix(target_path.suffix + ".bak")
-        shutil.copy2(target_path, backup_path)
-
-    with open(target_path, "wb") as fh:
-        fh.write(utf8_bytes)
-
-    lang_suffix, lang_prob = None, None
-    if target_path.suffix.lower() == ".srt":
-        lang_suffix, lang_prob = detect_language_tag(decoded)
-        if lang_suffix:
-            target_path = append_language_suffix(target_path, lang_suffix)
-
-    return encoding_used, confidence, target_path, lang_suffix, lang_prob
+APP_VERSION = "0.1.0"
 
 
 BaseClass = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
 
 
 class ConverterApp(BaseClass):
+    """Tkinter UI shell for conversion and update workflows."""
+
+    # GUI orchestration only: conversion/updater business logic is delegated to modules.
     def __init__(self):
         super().__init__()
         self.title("UTF-8 Text Converter")
@@ -252,13 +56,22 @@ class ConverterApp(BaseClass):
         self.status_var = tk.StringVar(value="Drop files or click 'Add Files' to begin.")
         self.backup_hint_tip = None
         self.backup_hint_pinned = False
+        self.update_state = load_update_state()
+        self.update_dialog = None
+        self.update_check_in_progress = False
+        self.update_manifest = None
+        self.update_config = build_effective_update_config()
 
         self._build_ui()
         self.manual_encoding.trace_add("write", lambda *_: self._update_convert_button_label())
         self._update_convert_button_label()
+        self.after(900, self._check_for_updates_async)
 
         if not DND_AVAILABLE:
             self.status_var.set("Drag & drop unavailable (install tkinterdnd2).")
+
+        if self.update_config.get("github_repository"):
+            self._log(f"[INFO] Update source: GitHub Releases ({self.update_config['github_repository']})\n")
 
     def _build_ui(self):
         container = ttk.Frame(self, padding=16)
@@ -466,6 +279,274 @@ class ConverterApp(BaseClass):
 
         self.backup_hint_pinned = True
         self._show_backup_hint(event)
+
+    # --- Updates ---
+    def _check_for_updates_async(self):
+        """Run startup update checks in a background thread to keep UI responsive."""
+        if self.update_check_in_progress:
+            return
+        if not should_check_for_updates(self.update_state):
+            return
+        mark_update_check(self.update_state)
+        save_update_state(self.update_state)
+        self.update_check_in_progress = True
+
+        def worker():
+            try:
+                manifest = self._resolve_update_manifest()
+                if not manifest:
+                    self._log("[INFO] Update source not configured or no valid release found.\n")
+                    return
+                if not is_newer_version(manifest["version"], APP_VERSION):
+                    return
+                skipped = (self.update_state.get("skipped_version") or "").strip()
+                if skipped and skipped == manifest["version"]:
+                    return
+                self.update_manifest = manifest
+                self.after(0, lambda: self._show_update_dialog(manifest))
+            except Exception as exc:
+                self._log(f"[INFO] Update check skipped: {exc}\n")
+            finally:
+                self.after(0, self._clear_update_check_flag)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _clear_update_check_flag(self):
+        self.update_check_in_progress = False
+
+    def _resolve_update_manifest(self):
+        """Build a normalized update payload from GitHub Releases metadata."""
+        cfg = self.update_config or {}
+        github_repo = str(cfg.get("github_repository") or "").strip()
+
+        if github_repo:
+            return fetch_manifest_from_github_release(
+                github_repo,
+                cfg.get("asset_name") or "",
+                APP_VERSION,
+                cfg.get("github_token") or "",
+            )
+
+        return None
+
+    def _show_update_dialog(self, manifest):
+        if self.update_dialog and self.update_dialog.winfo_exists():
+            self.update_dialog.lift()
+            return
+
+        packaged_mode = getattr(sys, "frozen", False) and Path(sys.executable).suffix.lower() == ".exe"
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Update available")
+        dialog.geometry("520x330")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        container = ttk.Frame(dialog, padding=14)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            container,
+            text=f"A new version is available: {manifest['name']}",
+            font=("", 11, "bold")
+        ).pack(anchor="w")
+        ttk.Label(container, text=f"Current version: {APP_VERSION}").pack(anchor="w", pady=(6, 0))
+        ttk.Label(container, text=f"Available version: {manifest['version']}").pack(anchor="w")
+        if manifest.get("published_at"):
+            ttk.Label(container, text=f"Published: {manifest['published_at']}").pack(anchor="w")
+
+        ttk.Label(container, text="Changes:", font=("", 10, "bold")).pack(anchor="w", pady=(12, 4))
+        notes = tk.Text(container, height=9, wrap="word", bg="#f8f8f8")
+        notes.pack(fill=tk.BOTH, expand=True)
+        notes.insert(tk.END, manifest.get("changelog") or "No release notes provided.")
+        notes.configure(state="disabled")
+
+        if not packaged_mode:
+            ttk.Label(
+                container,
+                text="Running from source mode. Open release page to download the latest EXE.",
+                foreground="#444444",
+            ).pack(anchor="w", pady=(8, 0))
+
+        button_row = ttk.Frame(container)
+        button_row.pack(fill=tk.X, pady=(12, 0))
+
+        def remind_later():
+            dialog.destroy()
+
+        def skip_version():
+            self.update_state["skipped_version"] = manifest["version"]
+            save_update_state(self.update_state)
+            dialog.destroy()
+
+        primary_text = "Update" if packaged_mode else "Open download page"
+        primary_action = (
+            lambda: self._start_update_download(manifest, dialog)
+            if packaged_mode
+            else lambda: self._open_manual_update(manifest, close_window=dialog)
+        )
+        tk.Button(
+            button_row,
+            text=primary_text,
+            command=primary_action,
+            bg="#f3f3f3",
+            fg="#111111",
+            activebackground="#e6e6e6",
+            activeforeground="#111111",
+            relief="raised",
+            padx=10,
+            pady=2,
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            button_row,
+            text="Remind me later",
+            command=remind_later,
+            bg="#f3f3f3",
+            fg="#111111",
+            activebackground="#e6e6e6",
+            activeforeground="#111111",
+            relief="raised",
+            padx=10,
+            pady=2,
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+        tk.Button(
+            button_row,
+            text="Skip this version",
+            command=skip_version,
+            bg="#f3f3f3",
+            fg="#111111",
+            activebackground="#e6e6e6",
+            activeforeground="#111111",
+            relief="raised",
+            padx=10,
+            pady=2,
+        ).pack(side=tk.LEFT)
+
+        dialog.protocol("WM_DELETE_WINDOW", remind_later)
+        self.update_dialog = dialog
+
+    def _start_update_download(self, manifest, dialog):
+        current_exe = Path(sys.executable)
+        packaged_mode = getattr(sys, "frozen", False) and current_exe.suffix.lower() == ".exe"
+        if not packaged_mode:
+            self._open_manual_update(manifest)
+            return
+
+        dialog.destroy()
+        self.status_var.set("Downloading update...")
+        self._log(f"[INFO] Downloading update {manifest['version']}...\n")
+
+        def worker():
+            try:
+                temp_dir = Path(tempfile.mkdtemp(prefix="utf8converter_update_"))
+                downloaded_exe = temp_dir / "utf8_converter_gui_new.exe"
+
+                download_to_file(manifest["download_url"], downloaded_exe, APP_VERSION)
+
+                expected = manifest.get("sha256") or ""
+                if expected:
+                    digest = hashlib.sha256()
+                    with open(downloaded_exe, "rb") as fh:
+                        for chunk in iter(lambda: fh.read(1024 * 128), b""):
+                            digest.update(chunk)
+                    actual = digest.hexdigest().lower()
+                    if actual != expected.lower():
+                        raise ValueError("Checksum mismatch for downloaded update.")
+
+                self._launch_updater_and_exit(current_exe, downloaded_exe)
+            except Exception as exc:
+                self.after(0, lambda: self._handle_update_failure(exc, manifest))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_update_failure(self, exc, manifest=None):
+        self.status_var.set("Update failed.")
+        self._log(f"[ERROR] Update failed: {exc}\n")
+        manual_url = self._manual_update_url(manifest)
+        message = f"Could not install update.\n\n{exc}"
+        if manual_url:
+            open_link = messagebox.askyesno(
+                "Update failed",
+                message + "\n\nOpen manual download page?"
+            )
+            if open_link:
+                webbrowser.open(manual_url)
+        else:
+            messagebox.showerror("Update failed", message)
+
+    def _manual_update_url(self, manifest):
+        if not isinstance(manifest, dict):
+            return ""
+        return str(manifest.get("manual_url") or manifest.get("download_url") or "").strip()
+
+    def _open_manual_update(self, manifest, close_window=None):
+        manual_url = self._manual_update_url(manifest)
+        if not manual_url:
+            messagebox.showerror("Update unavailable", "No release URL is available for manual update.")
+            return
+        if close_window is not None and close_window.winfo_exists():
+            close_window.destroy()
+        webbrowser.open(manual_url)
+
+    def _launch_updater_and_exit(self, target_exe, downloaded_exe):
+        script_path = downloaded_exe.parent / "apply_update.cmd"
+        current_pid = os.getpid()
+        backup_exe = target_exe.with_suffix(target_exe.suffix + ".old")
+        manual_url = ""
+        if isinstance(self.update_manifest, dict):
+            manual_url = str(self.update_manifest.get("manual_url") or self.update_manifest.get("download_url") or "")
+
+        script_content = (
+            "@echo off\n"
+            "setlocal\n"
+            f"set \"SRC={downloaded_exe}\"\n"
+            f"set \"DST={target_exe}\"\n"
+            f"set \"BAK={backup_exe}\"\n"
+            f"set \"FALLBACK_URL={manual_url}\"\n"
+            f"set \"PID={current_pid}\"\n"
+            "for /L %%I in (1,1,90) do (\n"
+            "  tasklist /FI \"PID eq %PID%\" | find \"%PID%\" >nul\n"
+            "  if errorlevel 1 goto replace\n"
+            "  timeout /t 1 /nobreak >nul\n"
+            ")\n"
+            ":replace\n"
+            "if not exist \"%SRC%\" goto fail\n"
+            "if exist \"%DST%\" copy /Y \"%DST%\" \"%BAK%\" >nul\n"
+            "if errorlevel 1 goto fail\n"
+            "copy /Y \"%SRC%\" \"%DST%\" >nul\n"
+            "if errorlevel 1 goto rollback\n"
+            "start \"\" \"%DST%\"\n"
+            "if errorlevel 1 goto rollback\n"
+            "goto cleanup\n"
+            ":rollback\n"
+            "if exist \"%BAK%\" copy /Y \"%BAK%\" \"%DST%\" >nul\n"
+            "goto fail\n"
+            ":fail\n"
+            "if not \"%FALLBACK_URL%\"==\"\" start \"\" \"%FALLBACK_URL%\"\n"
+            "goto cleanup\n"
+            ":cleanup\n"
+            "del /Q \"%SRC%\" >nul 2>nul\n"
+            "(goto) 2>nul & del \"%~f0\"\n"
+            "endlocal\n"
+        )
+
+        with open(script_path, "w", encoding="utf-8", newline="\r\n") as fh:
+            fh.write(script_content)
+
+        flags = 0
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+        if hasattr(subprocess, "DETACHED_PROCESS"):
+            flags |= subprocess.DETACHED_PROCESS
+
+        subprocess.Popen(
+            ["cmd", "/c", str(script_path)],
+            creationflags=flags,
+            close_fds=True,
+        )
+
+        self.after(0, self.destroy)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,19 @@
+# Local secrets
+update_config.json
+.env
+.env.*
+
+# Python cache/venv
+__pycache__/
+*.py[cod]
+.venv/
+
+# Build outputs
+build/
+dist/
+*.spec.bak
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

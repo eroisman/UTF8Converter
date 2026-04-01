@@ -136,8 +136,88 @@ Créez un script `build.ps1` contenant la commande ci-dessus. Ensuite, lancez si
 
 ---
 
-## 9. Licence
+## 9. Mise à jour automatique (popup au démarrage)
+
+Le projet utilise une stratégie production : **GitHub Releases** comme source unique des mises à jour.
+
+Fonctionnement :
+
+- vérification asynchrone au démarrage ;
+- popup avec **Update**, **Remind me later**, **Skip this version** ;
+- téléchargement de la nouvelle version depuis l'asset `.exe` de la release ;
+- remplacement de l'EXE via un script externe Windows (l'EXE en cours ne peut pas s'auto-remplacer pendant son exécution).
+
+### Activation
+
+1. Garder `ONE_CLICK_UPDATE_CONFIG = True` dans `updater.py`.
+2. Créer `update_config.json` (à partir de `update_config.sample.json`) :
+
+```json
+{
+   "github_repository": "eroisman/UTF8Converter",
+   "asset_name": "utf8_converter_gui.exe",
+   "github_token": ""
+}
+```
+
+3. Token optionnel mais recommandé si vous voyez des erreurs 403.
+4. Méthode la plus sûre : variable d'environnement locale `UTF8CONVERTER_GITHUB_TOKEN`.
+
+Fichier exemple fourni : `update_config.sample.json`.
+
+### Limite API GitHub (403 rate limit)
+
+Le check est automatiquement limité (cooldown) entre deux ouvertures d'application pour réduire fortement le risque de rate-limit.
+Si nécessaire, ajoutez un token local (non versionné) pour fiabiliser encore plus.
+
+### Gestion d'échec renforcée
+
+- détection d'échec de copie dans le script de remplacement ;
+- backup rollback (`.old`) si le remplacement échoue ;
+- ouverture optionnelle d'un lien de téléchargement manuel (`manual_url`) en cas d'échec.
+
+### Structure recommandée du code
+
+- `utf8_converter_gui.py` : UI Tkinter et orchestration.
+- `text_conversion.py` : logique de conversion/encodage/langue.
+- `updater.py` : configuration updater + intégration GitHub Releases.
+
+### Limites connues
+
+- Le remplacement automatique est prévu pour l'application packagée (`.exe`, mode PyInstaller).
+- Si l'EXE est installé dans un dossier protégé (ex. Program Files), un mécanisme élévation/UAC dédié pourra être ajouté dans une étape suivante.
+
+---
+
+## 10. Licence
 
 MIT.
+
+---
+
+## 11. Sécurité du token GitHub
+
+Le projet fonctionne sans token GitHub, mais un token local améliore la fiabilité.
+
+Si vous ajoutez un token localement :
+
+1. Ne mettez jamais un vrai token dans un fichier suivi par Git.
+2. Le fichier `update_config.json` est local et ignoré par `.gitignore`.
+3. Préférez la variable d'environnement `UTF8CONVERTER_GITHUB_TOKEN`.
+
+Vérifications avant push :
+
+```powershell
+git status --short
+git diff --cached
+```
+
+Si `update_config.json` a déjà été ajouté par erreur :
+
+```powershell
+git rm --cached update_config.json
+```
+
+Puis regenérez un nouveau token si vous pensez qu'il a pu fuiter.
 
 ---
