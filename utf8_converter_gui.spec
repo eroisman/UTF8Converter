@@ -5,7 +5,7 @@ a = Analysis(
     ['utf8_converter_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Users\\ycsl0680\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages\\tkinterdnd2', 'tkinterdnd2')],
+    datas=[('C:\\Dev\\UTF8Converter\\.venv\\Lib\\site-packages\\tkinterdnd2', 'tkinterdnd2')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
