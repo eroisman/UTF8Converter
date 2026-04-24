@@ -2,25 +2,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 import threading
-import os
 import sys
-import hashlib
-import subprocess
-import webbrowser
 import json
-from datetime import datetime
 
 from text_conversion import ENCODINGS, SUPPORTED_EXTENSIONS, convert_file
-from updater import (
-    build_effective_update_config,
-    fetch_manifest_from_github_release,
-    is_newer_version,
-    load_update_state,
-    save_update_state,
-    download_to_file,
-    should_check_for_updates,
-    mark_update_check,
-)
 
 # --- Try to enable drag & drop (tkinterdnd2) ---
 try:
@@ -77,32 +62,15 @@ def _load_app_version():
 
 
 APP_VERSION = _load_app_version()
-TEMP_TEST_BANNER = "TEST BUILD v0.2.2 - remove before production release"
-
-
-def _format_published_datetime(value):
-    """Convert ISO timestamps from GitHub API into a local, readable format."""
-    text = str(value or "").strip()
-    if not text:
-        return ""
-
-    try:
-        # GitHub returns UTC timestamps like 2026-03-30T09:32:32Z.
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone()
-        return parsed.strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        return text
 
 
 BaseClass = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
 
 
 class ConverterApp(BaseClass):
-    """Tkinter UI shell for conversion and update workflows."""
+    """Tkinter UI shell for file conversion workflows."""
 
-    # GUI orchestration only: conversion/updater business logic is delegated to modules.
+    # GUI orchestration only: conversion business logic is delegated to modules.
     def __init__(self):
         super().__init__()
         self.title("UTF-8 Text Converter")
@@ -118,38 +86,19 @@ class ConverterApp(BaseClass):
         self.status_var = tk.StringVar(value="Drop files or click 'Add Files' to begin.")
         self.backup_hint_tip = None
         self.backup_hint_pinned = False
-        self.update_state = load_update_state()
-        self.update_dialog = None
-        self.update_check_in_progress = False
-        self.update_manifest = None
-        self.update_config = build_effective_update_config()
 
         self._build_ui()
         self.manual_encoding.trace_add("write", lambda *_: self._update_convert_button_label())
         self._update_convert_button_label()
-        self.after(900, self._check_for_updates_async)
 
         if not DND_AVAILABLE:
             self.status_var.set("Drag & drop unavailable (install tkinterdnd2).")
 
         self._log(f"[INFO] UTF-8 Text Converter version {APP_VERSION}\n")
-        if self.update_config.get("github_repository"):
-            self._log(f"[INFO] Update source: GitHub Releases ({self.update_config['github_repository']})\n")
 
     def _build_ui(self):
         container = ttk.Frame(self, padding=16)
         container.pack(fill=tk.BOTH, expand=True)
-
-        tk.Label(
-            container,
-            text=TEMP_TEST_BANNER,
-            bg="#fff1f1",
-            fg="#9a1b1b",
-            relief="solid",
-            borderwidth=1,
-            padx=8,
-            pady=4,
-        ).pack(fill=tk.X, pady=(0, 8))
 
         file_header = ttk.Label(container, text="Files", font=("", 11, "bold"))
         file_header.pack(anchor="w")
@@ -353,278 +302,6 @@ class ConverterApp(BaseClass):
 
         self.backup_hint_pinned = True
         self._show_backup_hint(event)
-
-    # --- Updates ---
-    def _check_for_updates_async(self):
-        """Run startup update checks in a background thread to keep UI responsive."""
-        if self.update_check_in_progress:
-            return
-        if not should_check_for_updates(self.update_state):
-            return
-        mark_update_check(self.update_state)
-        save_update_state(self.update_state)
-        self.update_check_in_progress = True
-
-        def worker():
-            try:
-                manifest = self._resolve_update_manifest()
-                if not manifest:
-                    self._log("[INFO] Update source not configured or no valid release found.\n")
-                    return
-                if not is_newer_version(manifest["version"], APP_VERSION):
-                    return
-                skipped = (self.update_state.get("skipped_version") or "").strip()
-                if skipped and skipped == manifest["version"]:
-                    return
-                self.update_manifest = manifest
-                self.after(0, lambda: self._show_update_dialog(manifest))
-            except Exception as exc:
-                self._log(f"[INFO] Update check skipped: {exc}\n")
-            finally:
-                self.after(0, self._clear_update_check_flag)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _clear_update_check_flag(self):
-        self.update_check_in_progress = False
-
-    def _resolve_update_manifest(self):
-        """Build a normalized update payload from GitHub Releases metadata."""
-        cfg = self.update_config or {}
-        github_repo = str(cfg.get("github_repository") or "").strip()
-
-        if github_repo:
-            return fetch_manifest_from_github_release(
-                github_repo,
-                cfg.get("asset_name") or "",
-                APP_VERSION,
-                cfg.get("github_token") or "",
-            )
-
-        return None
-
-    def _show_update_dialog(self, manifest):
-        if self.update_dialog and self.update_dialog.winfo_exists():
-            self.update_dialog.lift()
-            return
-
-        packaged_mode = getattr(sys, "frozen", False) and Path(sys.executable).suffix.lower() == ".exe"
-
-        dialog = tk.Toplevel(self)
-        dialog.title("Update available")
-        dialog.geometry("520x330")
-        dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-
-        container = ttk.Frame(dialog, padding=14)
-        container.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(
-            container,
-            text=f"A new version is available: {manifest['name']}",
-            font=("", 11, "bold")
-        ).pack(anchor="w")
-        ttk.Label(container, text=f"Current version: {APP_VERSION}").pack(anchor="w", pady=(6, 0))
-        ttk.Label(container, text=f"Available version: {manifest['version']}").pack(anchor="w")
-        published_text = _format_published_datetime(manifest.get("published_at"))
-        if published_text:
-            ttk.Label(container, text=f"Published: {published_text}").pack(anchor="w")
-
-        ttk.Label(container, text="Changes:", font=("", 10, "bold")).pack(anchor="w", pady=(12, 4))
-        notes = tk.Text(container, height=9, wrap="word", bg="#f8f8f8")
-        notes.pack(fill=tk.BOTH, expand=True)
-        notes.insert(tk.END, manifest.get("changelog") or "No release notes provided.")
-        notes.configure(state="disabled")
-
-        if not packaged_mode:
-            ttk.Label(
-                container,
-                text="Running from source mode. Open release page to download the latest EXE.",
-                foreground="#444444",
-            ).pack(anchor="w", pady=(8, 0))
-
-        button_row = ttk.Frame(container)
-        button_row.pack(fill=tk.X, pady=(12, 0))
-
-        def remind_later():
-            dialog.destroy()
-
-        def skip_version():
-            self.update_state["skipped_version"] = manifest["version"]
-            save_update_state(self.update_state)
-            dialog.destroy()
-
-        primary_text = "Update" if packaged_mode else "Open download page"
-        primary_action = (
-            lambda: self._start_update_download(manifest, dialog)
-            if packaged_mode
-            else lambda: self._open_manual_update(manifest, close_window=dialog)
-        )
-        tk.Button(
-            button_row,
-            text=primary_text,
-            command=primary_action,
-            bg="#f3f3f3",
-            fg="#111111",
-            activebackground="#e6e6e6",
-            activeforeground="#111111",
-            relief="raised",
-            padx=10,
-            pady=2,
-        ).pack(side=tk.RIGHT)
-        tk.Button(
-            button_row,
-            text="Remind me later",
-            command=remind_later,
-            bg="#f3f3f3",
-            fg="#111111",
-            activebackground="#e6e6e6",
-            activeforeground="#111111",
-            relief="raised",
-            padx=10,
-            pady=2,
-        ).pack(side=tk.RIGHT, padx=(0, 8))
-        tk.Button(
-            button_row,
-            text="Skip this version",
-            command=skip_version,
-            bg="#f3f3f3",
-            fg="#111111",
-            activebackground="#e6e6e6",
-            activeforeground="#111111",
-            relief="raised",
-            padx=10,
-            pady=2,
-        ).pack(side=tk.LEFT)
-
-        dialog.protocol("WM_DELETE_WINDOW", remind_later)
-        self.update_dialog = dialog
-
-    def _start_update_download(self, manifest, dialog):
-        current_exe = Path(sys.executable)
-        packaged_mode = getattr(sys, "frozen", False) and current_exe.suffix.lower() == ".exe"
-        if not packaged_mode:
-            self._open_manual_update(manifest)
-            return
-
-        dialog.destroy()
-        self.status_var.set("Downloading update...")
-        self._log(f"[INFO] Downloading update {manifest['version']}...\n")
-
-        def worker():
-            try:
-                downloaded_exe = current_exe.with_name(f"{current_exe.stem}.new{current_exe.suffix}")
-                if downloaded_exe.exists():
-                    downloaded_exe.unlink()
-
-                download_to_file(manifest["download_url"], downloaded_exe, APP_VERSION)
-
-                expected = manifest.get("sha256") or ""
-                if expected:
-                    digest = hashlib.sha256()
-                    with open(downloaded_exe, "rb") as fh:
-                        for chunk in iter(lambda: fh.read(1024 * 128), b""):
-                            digest.update(chunk)
-                    actual = digest.hexdigest().lower()
-                    if actual != expected.lower():
-                        raise ValueError("Checksum mismatch for downloaded update.")
-
-                self._launch_updater_and_exit(current_exe, downloaded_exe)
-            except Exception as exc:
-                self.after(0, lambda: self._handle_update_failure(exc, manifest))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _handle_update_failure(self, exc, manifest=None):
-        self.status_var.set("Update failed.")
-        self._log(f"[ERROR] Update failed: {exc}\n")
-        manual_url = self._manual_update_url(manifest)
-        message = f"Could not install update.\n\n{exc}"
-        if manual_url:
-            open_link = messagebox.askyesno(
-                "Update failed",
-                message + "\n\nOpen manual download page?"
-            )
-            if open_link:
-                webbrowser.open(manual_url)
-        else:
-            messagebox.showerror("Update failed", message)
-
-    def _manual_update_url(self, manifest):
-        if not isinstance(manifest, dict):
-            return ""
-        return str(manifest.get("manual_url") or manifest.get("download_url") or "").strip()
-
-    def _open_manual_update(self, manifest, close_window=None):
-        manual_url = self._manual_update_url(manifest)
-        if not manual_url:
-            messagebox.showerror("Update unavailable", "No release URL is available for manual update.")
-            return
-        if close_window is not None and close_window.winfo_exists():
-            close_window.destroy()
-        webbrowser.open(manual_url)
-
-    def _launch_updater_and_exit(self, target_exe, downloaded_exe):
-        script_path = target_exe.parent / "apply_update.cmd"
-        current_pid = os.getpid()
-        backup_exe = target_exe.with_suffix(target_exe.suffix + ".old")
-        manual_url = ""
-        if isinstance(self.update_manifest, dict):
-            manual_url = str(self.update_manifest.get("manual_url") or self.update_manifest.get("download_url") or "")
-
-        script_content = (
-            "@echo off\n"
-            "setlocal\n"
-            f"set \"SRC={downloaded_exe}\"\n"
-            f"set \"DST={target_exe}\"\n"
-            f"set \"BAK={backup_exe}\"\n"
-            f"set \"FALLBACK_URL={manual_url}\"\n"
-            f"set \"PID={current_pid}\"\n"
-            "for /L %%I in (1,1,90) do (\n"
-            "  tasklist /FI \"PID eq %PID%\" | find \"%PID%\" >nul\n"
-            "  if errorlevel 1 goto replace\n"
-            "  timeout /t 1 /nobreak >nul\n"
-            ")\n"
-            ":replace\n"
-            "if not exist \"%SRC%\" goto fail\n"
-            "if exist \"%BAK%\" del /Q \"%BAK%\" >nul 2>nul\n"
-            "if exist \"%DST%\" move /Y \"%DST%\" \"%BAK%\" >nul\n"
-            "if errorlevel 1 goto fail\n"
-            "move /Y \"%SRC%\" \"%DST%\" >nul\n"
-            "if errorlevel 1 goto rollback\n"
-            "start \"\" \"%DST%\"\n"
-            "if errorlevel 1 goto rollback\n"
-            "goto cleanup\n"
-            ":rollback\n"
-            "if exist \"%BAK%\" move /Y \"%BAK%\" \"%DST%\" >nul\n"
-            "goto fail\n"
-            ":fail\n"
-            "if not \"%FALLBACK_URL%\"==\"\" start \"\" \"%FALLBACK_URL%\"\n"
-            "goto cleanup\n"
-            ":cleanup\n"
-            "del /Q \"%SRC%\" >nul 2>nul\n"
-            "(goto) 2>nul & del \"%~f0\"\n"
-            "endlocal\n"
-        )
-
-        with open(script_path, "w", encoding="utf-8", newline="\r\n") as fh:
-            fh.write(script_content)
-
-        flags = 0
-        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-            flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-        if hasattr(subprocess, "DETACHED_PROCESS"):
-            flags |= subprocess.DETACHED_PROCESS
-
-        subprocess.Popen(
-            ["cmd", "/c", str(script_path)],
-            creationflags=flags,
-            close_fds=True,
-        )
-
-        self.after(0, self.destroy)
-
 
 if __name__ == "__main__":
     app = ConverterApp()
