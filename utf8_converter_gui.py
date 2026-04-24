@@ -78,6 +78,7 @@ def _load_app_version():
 
 
 APP_VERSION = _load_app_version()
+TEMP_TEST_BANNER = "TEST BUILD v0.2.2 - remove before production release"
 
 
 def _format_published_datetime(value):
@@ -139,6 +140,17 @@ class ConverterApp(BaseClass):
     def _build_ui(self):
         container = ttk.Frame(self, padding=16)
         container.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            container,
+            text=TEMP_TEST_BANNER,
+            bg="#fff1f1",
+            fg="#9a1b1b",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=4,
+        ).pack(fill=tk.X, pady=(0, 8))
 
         file_header = ttk.Label(container, text="Files", font=("", 11, "bold"))
         file_header.pack(anchor="w")
