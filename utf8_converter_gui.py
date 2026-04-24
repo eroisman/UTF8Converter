@@ -5,7 +5,6 @@ import threading
 import os
 import sys
 import hashlib
-import tempfile
 import subprocess
 import webbrowser
 import json
@@ -515,8 +514,9 @@ class ConverterApp(BaseClass):
 
         def worker():
             try:
-                temp_dir = Path(tempfile.mkdtemp(prefix="utf8converter_update_"))
-                downloaded_exe = temp_dir / "utf8_converter_gui_new.exe"
+                downloaded_exe = current_exe.with_name(f"{current_exe.stem}.new{current_exe.suffix}")
+                if downloaded_exe.exists():
+                    downloaded_exe.unlink()
 
                 download_to_file(manifest["download_url"], downloaded_exe, APP_VERSION)
 
@@ -566,7 +566,7 @@ class ConverterApp(BaseClass):
         webbrowser.open(manual_url)
 
     def _launch_updater_and_exit(self, target_exe, downloaded_exe):
-        script_path = downloaded_exe.parent / "apply_update.cmd"
+        script_path = target_exe.parent / "apply_update.cmd"
         current_pid = os.getpid()
         backup_exe = target_exe.with_suffix(target_exe.suffix + ".old")
         manual_url = ""
@@ -588,15 +588,16 @@ class ConverterApp(BaseClass):
             ")\n"
             ":replace\n"
             "if not exist \"%SRC%\" goto fail\n"
-            "if exist \"%DST%\" copy /Y \"%DST%\" \"%BAK%\" >nul\n"
+            "if exist \"%BAK%\" del /Q \"%BAK%\" >nul 2>nul\n"
+            "if exist \"%DST%\" move /Y \"%DST%\" \"%BAK%\" >nul\n"
             "if errorlevel 1 goto fail\n"
-            "copy /Y \"%SRC%\" \"%DST%\" >nul\n"
+            "move /Y \"%SRC%\" \"%DST%\" >nul\n"
             "if errorlevel 1 goto rollback\n"
             "start \"\" \"%DST%\"\n"
             "if errorlevel 1 goto rollback\n"
             "goto cleanup\n"
             ":rollback\n"
-            "if exist \"%BAK%\" copy /Y \"%BAK%\" \"%DST%\" >nul\n"
+            "if exist \"%BAK%\" move /Y \"%BAK%\" \"%DST%\" >nul\n"
             "goto fail\n"
             ":fail\n"
             "if not \"%FALLBACK_URL%\"==\"\" start \"\" \"%FALLBACK_URL%\"\n"
