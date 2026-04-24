@@ -7,21 +7,20 @@
 - **updater.py** – GitHub Releases integration, version checking, update mechanics. Reusable module.
 - **version.json** – Version number and metadata (update this for each release).
 - **language_suffixes.json** – Language code mappings for subtitle files.
-- **.env.example** – Template for environment variables (document, don't commit secrets).
+- **update_config.sample.json** – Template for update source and asset configuration.
 
 ## Quick Start
 
 ```powershell
 # Setup
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install chardet ftfy langdetect tkinterdnd2 pyinstaller
+.venv\Scripts\python.exe -m pip install chardet ftfy langdetect tkinterdnd2 pyinstaller
 
 # Run
 python utf8_converter_gui.py
 
 # Build
-pyinstaller utf8_converter_gui.spec
+.venv\Scripts\python.exe -m PyInstaller utf8_converter_gui.spec
 ```
 
 ## Release Process
@@ -36,7 +35,7 @@ pyinstaller utf8_converter_gui.spec
 
 2. Rebuild executable:
    ```powershell
-   pyinstaller utf8_converter_gui.spec
+   .venv\Scripts\python.exe -m PyInstaller utf8_converter_gui.spec
    ```
 
 3. Test the `.exe` in `dist/` folder
@@ -51,7 +50,7 @@ pyinstaller utf8_converter_gui.spec
 5. Create GitHub Release:
    - Go to: https://github.com/eroisman/UTF8Converter/releases/new
    - Tag: `v0.2.1`
-   - Upload `dist/utf8_converter_gui.exe`
+   - Upload `dist/UTF8Converter.exe`
    - Users will get automatic update notification on next app launch
 
 ## GitHub Token Setup (for CI/CD or Local Development)
@@ -69,7 +68,7 @@ Or set permanently in Windows:
 
 ## Debugging
 
-- **Update check not running?** Check logs folder or enable debug mode in code
+- **Update check not running?** Verify `github_repository`/`asset_name` in `update_config.json` and check for GitHub API 403 rate-limit responses.
 - **File not converting?** Check encoding detection in `text_conversion.py`
 - **Language not detected?** Verify `language_suffixes.json` and `langdetect` model
 - **Update fails?** Check GitHub token validity and GitHub API rate limits

@@ -13,12 +13,13 @@ import urllib.error
 
 ONE_CLICK_UPDATE_CONFIG = True
 GITHUB_REPOSITORY = "eroisman/UTF8Converter"
-GITHUB_RELEASE_EXE_ASSET_NAME = "utf8_converter_gui.exe"
+GITHUB_RELEASE_EXE_ASSET_NAME = "UTF8Converter.exe"
 UPDATE_CONFIG_FILE = Path(__file__).with_name("update_config.json")
 GITHUB_TOKEN_ENV_VAR = "UTF8CONVERTER_GITHUB_TOKEN"
 UPDATE_CHECK_TIMEOUT_SECONDS = 6
 UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 90
-UPDATE_CHECK_MIN_INTERVAL_SECONDS = 6 * 60 * 60
+# Check updates on every app startup so users immediately see new releases.
+UPDATE_CHECK_MIN_INTERVAL_SECONDS = 0
 APPDATA_DIR = Path(os.getenv("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "UTF8Converter"
 UPDATE_STATE_PATH = APPDATA_DIR / "update_state.json"
 
@@ -85,6 +86,14 @@ def _best_exe_asset(assets, preferred_name=""):
     return None
 
 
+def _extract_sha256(asset):
+    """Extract sha256 from GitHub asset metadata when available."""
+    digest = str(asset.get("digest") or "").strip()
+    if digest.lower().startswith("sha256:"):
+        return digest.split(":", 1)[1].strip().lower()
+    return ""
+
+
 def fetch_manifest_from_github_release(repo_name, preferred_asset_name, app_version, github_token=""):
     repo = (repo_name or "").strip()
     if not repo or "/" not in repo:
@@ -124,7 +133,7 @@ def fetch_manifest_from_github_release(repo_name, preferred_asset_name, app_vers
         "version": version,
         "name": str(release.get("name") or tag_name or version).strip(),
         "download_url": str(asset.get("browser_download_url") or "").strip(),
-        "sha256": "",
+        "sha256": _extract_sha256(asset),
         "changelog": str(release.get("body") or "").strip(),
         "published_at": str(release.get("published_at") or "").strip(),
         "manual_url": str(release.get("html_url") or "").strip(),
@@ -205,7 +214,7 @@ def build_effective_update_config():
         if not config["github_repository"]:
             config["github_repository"] = _auto_detect_github_repo()
         if not config["asset_name"]:
-            config["asset_name"] = "utf8_converter_gui.exe"
+            config["asset_name"] = "UTF8Converter.exe"
 
     return config
 

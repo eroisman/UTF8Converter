@@ -12,17 +12,18 @@ A simple Windows application that converts text files and subtitles to UTF-8 enc
 - ✅ **File type support** – Works with `.txt`, `.srt`, `.ass`, `.vtt`, `.md`, `.csv`, and more
 - ✅ **Backup option** – Creates `.bak` backups of original files
 - ✅ **Progress tracking** – See conversion progress with a progress bar and log
+- ✅ **In-app auto update popup** – On startup, the app checks GitHub Releases and offers one-click update + relaunch
 
 ## Installation
 
 1. Download the latest release from [GitHub Releases](https://github.com/eroisman/UTF8Converter/releases)
-2. Run `utf8_converter_gui.exe`
+2. Run `UTF8Converter.exe`
 
 That's it! No configuration needed.
 
 ## How to Use
 
-1. **Open the application** – Run `utf8_converter_gui.exe`
+1. **Open the application** – Run `UTF8Converter.exe`
 2. **Select files** – Click "Select Files" or drag files onto the window
 3. **Configure** (optional):
    - Select input encoding (auto-detect is recommended)
@@ -57,10 +58,9 @@ cd UTF8Converter
 
 # Create virtual environment
 python -m venv .venv
-.venv\Scripts\Activate.ps1
 
 # Install dependencies
-pip install chardet ftfy langdetect tkinterdnd2 pyinstaller
+.venv\Scripts\python.exe -m pip install chardet ftfy langdetect tkinterdnd2 pyinstaller
 ```
 
 ### Run in Development
@@ -72,14 +72,20 @@ python utf8_converter_gui.py
 ### Build Executable
 
 ```powershell
-pyinstaller utf8_converter_gui.spec
+.venv\Scripts\python.exe -m PyInstaller utf8_converter_gui.spec
 ```
 
 The `.exe` will be created in `dist/` folder.
 
-## Optional: Automatic Updates
+## Automatic Updates
 
-The app can automatically check for new releases on GitHub. To enable this:
+The app checks GitHub Releases when it starts. If a newer version exists, users get an update popup with release notes and three options:
+
+- **Update**: download, replace current `.exe`, and relaunch automatically
+- **Remind me later**
+- **Skip this version**
+
+To configure repository/asset or provide a token:
 
 ### Method 1: Environment Variable (Recommended)
 
@@ -104,12 +110,12 @@ Create `update_config.json` in the same folder as the `.exe`:
 ```json
 {
   "github_repository": "eroisman/UTF8Converter",
-  "asset_name": "utf8_converter_gui.exe",
+   "asset_name": "UTF8Converter.exe",
   "github_token": ""
 }
 ```
 
-> **Note**: Leave `github_token` empty to use the environment variable. If you leave it empty and have no token, the app still works—check for updates will be skipped to avoid GitHub API rate limits.
+> **Note**: Leave `github_token` empty to use the environment variable. If you leave it empty and have no token, update checks still run, but may occasionally fail if GitHub API rate limits are reached.
 
 ### How to Get a GitHub Token
 
@@ -132,7 +138,7 @@ To release a new version:
 
 2. Rebuild the `.exe`:
    ```powershell
-   pyinstaller utf8_converter_gui.spec
+   .venv\Scripts\python.exe -m PyInstaller utf8_converter_gui.spec
    ```
 
 3. Upload to GitHub Releases

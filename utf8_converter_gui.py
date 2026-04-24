@@ -9,6 +9,7 @@ import tempfile
 import subprocess
 import webbrowser
 import json
+from datetime import datetime
 
 from text_conversion import ENCODINGS, SUPPORTED_EXTENSIONS, convert_file
 from updater import (
@@ -31,22 +32,68 @@ except ImportError:
     DND_FILES = None
 
 ICON_PATH = Path(__file__).with_name("utf8converter.ico")
-VERSION_FILE = Path(__file__).with_name("version.json")
+
+
+def _version_file_candidates():
+    """Return likely version.json locations for source and packaged runs."""
+    candidates = []
+
+    # Source mode: version.json beside this script.
+    candidates.append(Path(__file__).with_name("version.json"))
+
+    # Packaged mode: version.json beside the executable.
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).with_name("version.json"))
+
+    # PyInstaller one-file extraction directory.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "version.json")
+
+    # De-duplicate while preserving order.
+    unique = []
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
 
 
 def _load_app_version():
     """Load version from version.json, fallback to 0.1.0 if not found."""
-    try:
-        if VERSION_FILE.exists():
-            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+    for version_file in _version_file_candidates():
+        try:
+            if not version_file.exists():
+                continue
+            with open(version_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return str(data.get("version", "0.1.0"))
-    except Exception:
-        pass
+            version = str(data.get("version", "")).strip()
+            if version:
+                return version
+        except Exception:
+            continue
     return "0.1.0"
 
 
 APP_VERSION = _load_app_version()
+
+
+def _format_published_datetime(value):
+    """Convert ISO timestamps from GitHub API into a local, readable format."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    try:
+        # GitHub returns UTC timestamps like 2026-03-30T09:32:32Z.
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return text
 
 
 BaseClass = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
@@ -85,6 +132,7 @@ class ConverterApp(BaseClass):
         if not DND_AVAILABLE:
             self.status_var.set("Drag & drop unavailable (install tkinterdnd2).")
 
+        self._log(f"[INFO] UTF-8 Text Converter version {APP_VERSION}\n")
         if self.update_config.get("github_repository"):
             self._log(f"[INFO] Update source: GitHub Releases ({self.update_config['github_repository']})\n")
 
@@ -368,8 +416,9 @@ class ConverterApp(BaseClass):
         ).pack(anchor="w")
         ttk.Label(container, text=f"Current version: {APP_VERSION}").pack(anchor="w", pady=(6, 0))
         ttk.Label(container, text=f"Available version: {manifest['version']}").pack(anchor="w")
-        if manifest.get("published_at"):
-            ttk.Label(container, text=f"Published: {manifest['published_at']}").pack(anchor="w")
+        published_text = _format_published_datetime(manifest.get("published_at"))
+        if published_text:
+            ttk.Label(container, text=f"Published: {published_text}").pack(anchor="w")
 
         ttk.Label(container, text="Changes:", font=("", 10, "bold")).pack(anchor="w", pady=(12, 4))
         notes = tk.Text(container, height=9, wrap="word", bg="#f8f8f8")

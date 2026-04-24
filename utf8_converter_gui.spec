@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files
+
+tkdnd_datas = collect_data_files('tkinterdnd2')
+app_datas = tkdnd_datas + [('version.json', '.')]
 
 a = Analysis(
     ['utf8_converter_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Dev\\UTF8Converter\\.venv\\Lib\\site-packages\\tkinterdnd2', 'tkinterdnd2')],
+    datas=app_datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -22,7 +26,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='utf8_converter_gui',
+    name='UTF8Converter',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
